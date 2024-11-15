@@ -1,24 +1,23 @@
-import { ChatOllama } from "@langchain/ollama";
-import { ChatOpenAI } from "@langchain/openai";
 
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from '@langchain/core/output_parsers';
-import { PROMPT_TEMPLATE } from "./prompt/PROMPT_TEMPLATE.js";
-import client from "./pg.js";
 
-let ollama = new ChatOllama({
-    model: "llama3.1",
-    temperature: 0
-});
+import client from "./utils/pg.js";
+import resultTool from "./tools/result.js";
+import sqlTool from "./tools/sql.js";
 
-let llm = new ChatOpenAI({
+// import { ChatOllama } from "@langchain/ollama";
+// const ollama = new ChatOllama({
+//     model: "llama3.1",
+//     temperature: 0
+// });
+
+import { ChatOpenAI } from "@langchain/openai";
+const llm = new ChatOpenAI({
     model: "gpt-3.5-turbo",
     temperature: 0
 });
 
-const prompt = ChatPromptTemplate.fromTemplate(PROMPT_TEMPLATE);
-
-let sqlChain = prompt.pipe(llm).pipe(new StringOutputParser());
 
 async function execute_query_with_retry(sql_query, retry = 3) {
     try {
@@ -29,6 +28,7 @@ async function execute_query_with_retry(sql_query, retry = 3) {
         const correctionPrompt = `The following SQL query caused an error:\n
                             Query: ${sql_query}\n
                             Error: ${error.message}\n
+                            Schema: ${schema}\n
                             Please correct the query.\n
                             Corrected SQL Query:`;
 
@@ -40,29 +40,17 @@ async function execute_query_with_retry(sql_query, retry = 3) {
     }
 }
 
+export default async function Agent(question) {
 
-const question = process.argv[2];
-const sql_query = await sqlChain.invoke({
-    question
-});
-// console.log("Generated SQL query: \n", sql_query)
-if (sql_query == 0) {
-    console.log("Sorry, I can't execute it.")
-    process.exit(0);
+    const sql_query = await sqlTool(llm, question);
+
+    console.log("Generated SQL query: \n", sql_query)
+    if (sql_query == 0) {
+        return "Sorry, I can only answer database related questions.";
+    }
+    const result = await execute_query_with_retry(sql_query);
+    // await client.end();
+    console.log("SQL Result:", result);
+
+    return await resultTool(llm, { question, sql_query, result });
 }
-const result = await execute_query_with_retry(sql_query);
-await client.end()
-
-const PROMPT_TEMPLATE2 = `
-     Your are a helpful AI assistance. Answer based on below context.
-       
-     Question:  ${question}
-     SQL Query: ${sql_query}
-     SQL Query Result: {result}
-
-     Answer:
-    `;
-
-const prompt2 = ChatPromptTemplate.fromTemplate(PROMPT_TEMPLATE2);
-let sqlChain2 = prompt2.pipe(ollama).pipe(new StringOutputParser());
-console.log(await sqlChain2.invoke({ result }))
